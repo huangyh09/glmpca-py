@@ -11,16 +11,16 @@ def trigamma(x):
   return polygamma(1,x)
 
 def rowSums(x):
-  return x.sum(1)
+  return np.array(x.sum(1)).reshape(-1)
 
 def rowMeans(x):
-  return x.mean(1)
+  return np.array(x.mean(1)).reshape(-1)
 
 def colSums(x):
-  return x.sum(0)
+  return np.array(x.sum(0)).reshape(-1)
 
 def colMeans(x):
-  return x.mean(0)
+  return np.array(x.mean(0)).reshape(-1)
 
 def colNorms(x):
   """
@@ -201,7 +201,7 @@ def glmpca_init(Y,fam,sz=None,nb_theta=None):
     raise GlmpcaError("Some rows were all zero, please remove them.")
   return {"gf":gf, "rfunc":rfunc, "intercepts":a1}
 
-def est_nb_theta(y,mu,th):
+def est_nb_theta(y,mu,th, multi_theta=True):
   """
   given count data y and predicted means mu>0, and a neg binom theta "th"
   use Newton's Method to update theta based on the negative binomial likelihood
@@ -213,22 +213,32 @@ def est_nb_theta(y,mu,th):
   d2theta/du2=theta
   dL/dtheta * dtheta/du
   """
+  if multi_theta:
+    axis = 1
+  else:
+    axis = None
+  
   #n= length(y)
   u= log(th)
   #dL/dtheta*dtheta/du
-  score=  th*np.sum(digamma(th+y)-digamma(th)+log(th)+1-log(th+mu)-(y+th)/(mu+th))
+  score=  th*np.sum(digamma(th+y)-digamma(th)+log(th)+1-log(th+mu)-(y+th)/(mu+th), axis=axis, keepdims=True)
   #d^2L/dtheta^2 * (dtheta/du)^2
-  info1=  -(th**2)*np.sum(trigamma(th+mu)-trigamma(th)+1/th-2/(mu+th)+(y+th)/(mu+th)**2)
+  info1=  -(th**2)*np.sum(trigamma(th+mu)-trigamma(th)+1/th-2/(mu+th)+(y+th)/(mu+th)**2, axis=axis, keepdims=True)
   #dL/dtheta*d^2theta/du^2 = score
   info=  info1-score
   #L2 penalty on u=log(th)
-  return np.exp(u+(score-u)/(info+1))
+  new_theta = np.exp(u+(score-u)/(info+1))
+
+  # TODO: be careful with the clipping
+  new_theta = np.clip(new_theta, 10^-6, 10^6)
+
+  return new_theta
   #grad= score-u
   #exp(u+sign(grad)*min(maxstep,abs(grad)))
 
 def glmpca(Y, L, fam="poi", ctl = {"maxIter":1000, "eps":1e-4, "optimizeTheta":True}, penalty = 1,
            verbose = False, init = {"factors": None, "loadings":None},
-           nb_theta = 100, X = None, Z = None, sz = None):
+           nb_theta = 100, X = None, Z = None, sz = None, multi_theta=False):
   """
   GLM-PCA
 
@@ -298,7 +308,9 @@ def glmpca(Y, L, fam="poi", ctl = {"maxIter":1000, "eps":1e-4, "optimizeTheta":T
 
   """
   #For negative binomial, convergence only works if starting with nb_theta large
+  # TODO: support sparse matrix:
   Y= np.array(Y)
+
   if fam not in ("poi","nb","mult","bern"): raise GlmpcaError("invalid fam")
   J,N=Y.shape
   #sanity check inputs
@@ -327,6 +339,11 @@ def glmpca(Y, L, fam="poi", ctl = {"maxIter":1000, "eps":1e-4, "optimizeTheta":T
   vid= np.concatenate((np.array(range(Ko)),lid))
   Ku= len(uid)
   Kv= len(vid)
+
+  if multi_theta:
+    nb_theta = np.ones((Y.shape[0], 1)) * nb_theta
+  else:
+    nb_theta = np.ones((1, 1)) * nb_theta
 
   #create GlmpcaFamily object
   gnt= glmpca_init(Y,fam,sz,nb_theta)
@@ -357,7 +374,7 @@ def glmpca(Y, L, fam="poi", ctl = {"maxIter":1000, "eps":1e-4, "optimizeTheta":T
       break
     if verbose:
       msg = "Iteration: {:d} | deviance={:.4E}".format(t,Decimal(dev[t]))
-      if fam=="nb": msg+= " | nb_theta: {:.3E}".format(nb_theta)
+      if fam=="nb": msg+= " | nb_theta: {:.3E}".format(np.mean(nb_theta))
       print(msg)
 
     #(k in lid) ensures no penalty on regression coefficients:
@@ -372,8 +389,9 @@ def glmpca(Y, L, fam="poi", ctl = {"maxIter":1000, "eps":1e-4, "optimizeTheta":T
       infos= crossprod(ig["info"], V[:,k]**2) + penalty*(k in lid)
       U[:,k]+= grads/infos
     if fam=="nb":
+      # NEW: theta per feature, i.e., Factor Analysis
       if ctl["optimizeTheta"]:
-        nb_theta= est_nb_theta(Y,gf.family.link.inverse(rfunc(U,V)),nb_theta)
+        nb_theta= est_nb_theta(Y,gf.family.link.inverse(rfunc(U,V)),nb_theta, multi_theta)
       gf= GlmpcaFamily(fam,nb_theta)
   #postprocessing: include row and column labels for regression coefficients
   if ncol(Z)==0: G= None
@@ -383,6 +401,9 @@ def glmpca(Y, L, fam="poi", ctl = {"maxIter":1000, "eps":1e-4, "optimizeTheta":T
   res= ortho(U[:,lid],V[:,lid],A,X=X,G=G,Z=Z)
   res["dev"]=dev[range(t+1)]
   res["glmpca_family"]= gf
+  res['U'] = U
+  res['V'] = V
+  # res['R'] = U @ V.T + log(Y.mean(1)) # rfunc(U,V) 
   return res
 
 if __name__=="__main__":
