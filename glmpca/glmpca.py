@@ -11,16 +11,16 @@ def trigamma(x):
   return polygamma(1,x)
 
 def rowSums(x):
-  return np.array(x.sum(1)).reshape(-1)
+  return np.array(np.nansum(x, 1)).reshape(-1)
 
 def rowMeans(x):
-  return np.array(x.mean(1)).reshape(-1)
+  return np.array(np.nanmean(x, 1)).reshape(-1)
 
 def colSums(x):
-  return np.array(x.sum(0)).reshape(-1)
+  return np.array(np.nansum(x, 0)).reshape(-1)
 
 def colMeans(x):
-  return np.array(x.mean(0)).reshape(-1)
+  return np.array(np.nanmean(x, 0)).reshape(-1)
 
 def colNorms(x):
   """
@@ -96,6 +96,20 @@ def mat_binom_dev(X,P,n):
   term2= term2[np.isfinite(term2)].sum()
   return 2*(term1+term2)
 
+def mat_nb_dev(fam_obj, Y, M):
+  """deviance of negative binomial
+  https://github.com/statsmodels/statsmodels/blob/main/statsmodels/genmod/families/family.py#L1374
+  """
+  _idx = np.isnan(Y)
+  Y_filled = Y.copy()
+  M_filled = M.copy()
+
+  # arbitrary filling; same for Y & M
+  Y_filled[_idx] = 1
+  M_filled[_idx] = 1
+
+  return fam_obj.family.deviance(Y_filled, M_filled)
+
 class GlmpcaError(ValueError):
   pass
 
@@ -130,7 +144,9 @@ class GlmpcaFamily(object):
       def infograd(Y,R):
         M= ilfunc(R) #ilfunc=exp
         W= 1/vfunc(M)
-        return {"grad":(Y-M)*W*M,"info":W*(M**2)}
+        Y_filled = Y.copy()
+        Y_filled[np.isnan(Y)] = M[np.isnan(Y)]
+        return {"grad":(Y_filled-M)*W*M,"info":W*(M**2)}
       self.nb_theta = nb_theta
     elif fam=="mult":
       def infograd(Y,R):
@@ -154,6 +170,9 @@ class GlmpcaFamily(object):
     if fam=="mult":
       def dev_func(Y,R):
         return mat_binom_dev(Y,ilfunc(R),mult_n)
+    elif fam == "nb" or fam == "poi":
+      def dev_func(Y, R):
+        return mat_nb_dev(self, Y, ilfunc(R))
     else:
       def dev_func(Y,R):
         return self.family.deviance(Y,ilfunc(R))
@@ -221,9 +240,9 @@ def est_nb_theta(y,mu,th, multi_theta=True):
   #n= length(y)
   u= log(th)
   #dL/dtheta*dtheta/du
-  score=  th*np.sum(digamma(th+y)-digamma(th)+log(th)+1-log(th+mu)-(y+th)/(mu+th), axis=axis, keepdims=True)
+  score=  th*np.nansum(digamma(th+y)-digamma(th)+log(th)+1-log(th+mu)-(y+th)/(mu+th), axis=axis, keepdims=True)
   #d^2L/dtheta^2 * (dtheta/du)^2
-  info1=  -(th**2)*np.sum(trigamma(th+mu)-trigamma(th)+1/th-2/(mu+th)+(y+th)/(mu+th)**2, axis=axis, keepdims=True)
+  info1=  -(th**2)*np.nansum(trigamma(th+mu)-trigamma(th)+1/th-2/(mu+th)+(y+th)/(mu+th)**2, axis=axis, keepdims=True)
   #dL/dtheta*d^2theta/du^2 = score
   info=  info1-score
   #L2 penalty on u=log(th)
