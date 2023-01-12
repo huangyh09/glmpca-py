@@ -220,7 +220,7 @@ def glmpca_init(Y,fam,sz=None,nb_theta=None):
     raise GlmpcaError("Some rows were all zero, please remove them.")
   return {"gf":gf, "rfunc":rfunc, "intercepts":a1}
 
-def est_nb_theta(y,mu,th, multi_theta=True):
+def est_nb_theta(y,mu,th, multi_theta=True, theta_min=1e-3, theta_max=1e3):
   """
   given count data y and predicted means mu>0, and a neg binom theta "th"
   use Newton's Method to update theta based on the negative binomial likelihood
@@ -249,7 +249,7 @@ def est_nb_theta(y,mu,th, multi_theta=True):
   new_theta = np.exp(u+(score-u)/(info+1))
 
   # TODO: be careful with the clipping
-  new_theta = np.clip(new_theta, 10^-6, 10^6)
+  new_theta = np.clip(new_theta, theta_min, theta_max)
 
   return new_theta
   #grad= score-u
@@ -257,7 +257,8 @@ def est_nb_theta(y,mu,th, multi_theta=True):
 
 def glmpca(Y, L, fam="poi", ctl = {"maxIter":1000, "eps":1e-4, "optimizeTheta":True}, penalty = 1,
            verbose = False, init = {"factors": None, "loadings":None},
-           nb_theta = 100, X = None, Z = None, sz = None, multi_theta=False):
+           nb_theta = 100, X = None, Z = None, sz = None, 
+           multi_theta=False, theta_min=1e-3, theta_max=1e3):
   """
   GLM-PCA
 
@@ -410,7 +411,8 @@ def glmpca(Y, L, fam="poi", ctl = {"maxIter":1000, "eps":1e-4, "optimizeTheta":T
     if fam=="nb":
       # NEW: theta per feature, i.e., Factor Analysis
       if ctl["optimizeTheta"]:
-        nb_theta= est_nb_theta(Y,gf.family.link.inverse(rfunc(U,V)),nb_theta, multi_theta)
+        nb_theta= est_nb_theta(Y,gf.family.link.inverse(rfunc(U,V)),nb_theta, 
+          multi_theta, theta_min, theta_max)
       gf= GlmpcaFamily(fam,nb_theta)
   #postprocessing: include row and column labels for regression coefficients
   if ncol(Z)==0: G= None
